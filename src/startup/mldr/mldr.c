@@ -42,6 +42,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 #include <sys/ptrace.h>
 #include <pthread.h>
 #include <sys/utsname.h>
+#include <sys/personality.h>
 
 #ifndef PAGE_SIZE
 #	define PAGE_SIZE	4096
@@ -106,6 +107,52 @@ void* __mldr_main_stack_top = NULL;
 static int kernel_major = -1;
 static int kernel_minor = -1;
 
+#ifdef __x86_64__
+// x86Code: the iOS simulator's dyld shared cache. dyld_sim maps it privately with MAP_FIXED at the addresses the cache
+// was built for (x86_64: SHARED_REGION_BASE_X86_64 0x7FF800000000, 6 subcaches, 24 GB, no slide info), so it can't
+// move and every process maps the same file pages at the same addresses (clean pages stay shared in the page cache).
+// On macOS that range is the shared region and nothing else lives there; on Linux it is where the kernel puts a
+// randomized stack and the top-down mmap area. Reserve it (PROT_NONE, no commit) before anything is loaded so later
+// mmaps avoid it and dyld_sim's MAP_FIXED mappings replace the reservation. Only for processes that are given a cache
+// (DYLD_SHARED_CACHE_DIR). If the range is taken (about half the time with Linux stack ASLR), re-exec once with
+// ADDR_NO_RANDOMIZE: the stack is then just below TASK_SIZE, above the range, and children inherit the personality.
+// If it still can't be reserved, hide DYLD_SHARED_CACHE_DIR so dyld_sim runs without the cache instead of mapping
+// over live memory.
+#define SIM_SHARED_REGION_BASE 0x7FF800000000ULL
+#define SIM_SHARED_REGION_SIZE 0x600000000ULL
+
+static void reserve_sim_shared_region(char** argv, char** envp)
+{
+	static const char var[] = "DYLD_SHARED_CACHE_DIR=";
+	char* found = NULL;
+	for (char** e = envp; *e != NULL; ++e) {
+		if (strncmp(*e, var, sizeof(var) - 1) == 0) {
+			found = *e;
+			break;
+		}
+	}
+	if (found == NULL || getenv("X86CODE_NO_SHARED_REGION") != NULL)
+		return;
+
+	void* p = mmap((void*) SIM_SHARED_REGION_BASE, SIM_SHARED_REGION_SIZE, PROT_NONE,
+		MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+	if (p == (void*) SIM_SHARED_REGION_BASE)
+		return;
+	if (p != MAP_FAILED)
+		munmap(p, SIM_SHARED_REGION_SIZE); // a kernel without MAP_FIXED_NOREPLACE placed it elsewhere
+
+	int pers = personality(0xffffffff);
+	if (pers != -1 && !(pers & ADDR_NO_RANDOMIZE) && personality(pers | ADDR_NO_RANDOMIZE) != -1) {
+		execve("/proc/self/exe", argv, envp);
+		personality(pers);
+	}
+
+	fprintf(stderr, "mldr: shared region %#llx-%#llx is in use; running without the dyld shared cache\n",
+		SIM_SHARED_REGION_BASE, SIM_SHARED_REGION_BASE + SIM_SHARED_REGION_SIZE);
+	found[0] = '_'; // "_YLD_SHARED_CACHE_DIR": dyld_sim doesn't see it, children don't either
+}
+#endif
+
 int main(int argc, char** argv, char** envp)
 {
 	void** sp;
@@ -123,6 +170,10 @@ int main(int argc, char** argv, char** envp)
 		++mldr_load_results.envc;
 	}
 	mldr_load_results.envp = envp;
+
+#ifdef __x86_64__
+	reserve_sim_shared_region(argv, envp);
+#endif
 
 	// sys_execve() passes the original file path appended to the mldr path in argv[0].
 	if (argc > 0)
