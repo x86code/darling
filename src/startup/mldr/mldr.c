@@ -269,6 +269,9 @@ static const char* arm64_host_setup(struct load_results* lr)
 	if (exe == NULL)
 		return NULL;
 	mmap((void*) 0x1C0000000ULL, 0x100000000ULL, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+	// the re-exec through /proc/self/exe named the Linux task "exe" (launchd's logs, proc_name): use the program's name
+	const char* base = strrchr(exe, '/');
+	prctl(PR_SET_NAME, base ? base + 1 : exe, 0, 0, 0);
 	if (strncmp(exe, X86CODE_A64_SYSTEM_ROOT "/", sizeof(X86CODE_A64_SYSTEM_ROOT)) == 0)
 		snprintf(linux_path, sizeof(linux_path), "%s", exe + sizeof(X86CODE_A64_SYSTEM_ROOT) - 1);
 	else if (lr->root_path)
