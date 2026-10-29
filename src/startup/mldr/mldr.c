@@ -153,6 +153,132 @@ static void reserve_sim_shared_region(char** argv, char** envp)
 }
 #endif
 
+#ifdef __x86_64__
+// x86Code (arm64 plan, stage 1): Apple's arm64-only iOS-simulator binaries (iOS 27 runtime) run under a JIT. For an
+// arm64-only Mach-O, mldr re-executes itself on host/arm64host (an x86_64 macOS program installed next to mldr), which
+// starts like any Darling process and then runs the arm64 program in libarm64jit.so (dynarmic). DYLD_* variables are
+// renamed X86CODE_A64_DYLD_* so Darling's dyld doesn't act on them; libarm64jit gives them back to dyld_sim.
+// X86CODE_A64_EXE is the arm64 program (Darwin path); libsystem_kernel keys simulator behaviour on it.
+#define X86CODE_A64_SYSTEM_ROOT "/Volumes/SystemRoot"
+
+static bool is_arm64_only(const char* path)
+{
+	uint32_t buf[2 + 5 * 16];
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return false;
+	ssize_t n = read(fd, buf, sizeof(buf));
+	close(fd);
+	if (n < 8)
+		return false;
+	if (buf[0] == MH_MAGIC_64)
+		return buf[1] == CPU_TYPE_ARM64;
+	if (buf[0] == FAT_CIGAM) {
+		uint32_t count = be32toh(buf[1]);
+		bool arm64 = false;
+		for (uint32_t i = 0; i < count && i < 16 && (ssize_t)((2 + 5 * (i + 1)) * 4) <= n; i++) {
+			uint32_t cpu = be32toh(buf[2 + 5 * i]);
+			if (cpu == CPU_TYPE_X86_64 || cpu == CPU_TYPE_X86)
+				return false;
+			if (cpu == CPU_TYPE_ARM64)
+				arm64 = true;
+		}
+		return arm64;
+	}
+	return false;
+}
+
+static void arm64_reexec(const char* filename, char** argv, char** envp, struct load_results* lr)
+{
+	static char self[4096], host[4200], jit[4200], darwin_path[8192];
+	if (!is_arm64_only(filename))
+		return;
+	ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+	if (len <= 0) {
+		fprintf(stderr, "mldr: cannot find myself\n");
+		exit(1);
+	}
+	self[len] = '\0';
+	char* slash = strrchr(self, '/');
+	*slash = '\0';
+	snprintf(host, sizeof(host), "%s/arm64host", self);
+	snprintf(jit, sizeof(jit), "%s/libarm64jit.so", self);
+	*slash = '/';
+	if (access(host, R_OK) != 0 || access(jit, R_OK) != 0) {
+		fprintf(stderr, "mldr: %s is an arm64 binary and the arm64 runtime (%s, %s) is not installed\n", filename, host, jit);
+		exit(1);
+	}
+
+	// The program's path as Darwin processes see it (as setup_stack64 computes executable_path)
+	if (lr->root_path && strncmp(filename, lr->root_path, lr->root_path_length) == 0)
+		snprintf(darwin_path, sizeof(darwin_path), "%s", filename + lr->root_path_length);
+	else if (lr->root_path)
+		snprintf(darwin_path, sizeof(darwin_path), X86CODE_A64_SYSTEM_ROOT "%s", filename);
+	else
+		snprintf(darwin_path, sizeof(darwin_path), "%s", filename);
+
+	size_t envc = 0;
+	while (envp[envc])
+		envc++;
+	char** nenv = malloc((envc + 3) * sizeof(char*));
+	size_t k = 0;
+	for (size_t i = 0; i < envc; i++) {
+		if (strncmp(envp[i], "X86CODE_A64_EXE=", 16) == 0 || strncmp(envp[i], "X86CODE_A64_JIT=", 16) == 0)
+			continue;
+		if (strncmp(envp[i], "DYLD_", 5) == 0) {
+			char* r = malloc(strlen(envp[i]) + 13);
+			strcpy(r, "X86CODE_A64_");
+			strcat(r, envp[i]);
+			nenv[k++] = r;
+		} else
+			nenv[k++] = envp[i];
+	}
+	nenv[k] = malloc(strlen(darwin_path) + 17);
+	strcpy(nenv[k], "X86CODE_A64_EXE=");
+	strcat(nenv[k++], darwin_path);
+	nenv[k] = malloc(strlen(jit) + 17);
+	strcpy(nenv[k], "X86CODE_A64_JIT=");
+	strcat(nenv[k++], jit);
+	nenv[k] = NULL;
+
+	// argv[1..] are the program's argv in both invocation forms ("mldr!file argv0 ..." and "mldr file ...")
+	size_t argc = 0;
+	while (argv[argc])
+		argc++;
+	char** nargv = malloc((argc + 2) * sizeof(char*));
+	nargv[0] = malloc(strlen(self) + strlen(host) + 2);
+	sprintf(nargv[0], "%s!%s", self, host);
+	for (size_t i = 1; i < argc; i++)
+		nargv[i] = argv[i];
+	if (argc < 2) {
+		nargv[1] = (char*) filename;
+		argc = 2;
+	}
+	nargv[argc] = NULL;
+	execve("/proc/self/exe", nargv, nenv);
+	fprintf(stderr, "mldr: cannot re-execute for %s: %s\n", filename, strerror(errno));
+	exit(1);
+}
+
+// In the re-executed arm64host: keep the arm64 shared cache's fixed range (0x1C0000000, ~3 GB) free for dyld_sim, and
+// tell darlingserver the arm64 program is the executable (proc_pidpath, the process's platform).
+static const char* arm64_host_setup(struct load_results* lr)
+{
+	static char linux_path[8192];
+	const char* exe = getenv("X86CODE_A64_EXE");
+	if (exe == NULL)
+		return NULL;
+	mmap((void*) 0x1C0000000ULL, 0x100000000ULL, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+	if (strncmp(exe, X86CODE_A64_SYSTEM_ROOT "/", sizeof(X86CODE_A64_SYSTEM_ROOT)) == 0)
+		snprintf(linux_path, sizeof(linux_path), "%s", exe + sizeof(X86CODE_A64_SYSTEM_ROOT) - 1);
+	else if (lr->root_path)
+		snprintf(linux_path, sizeof(linux_path), "%s%s", lr->root_path, exe);
+	else
+		snprintf(linux_path, sizeof(linux_path), "%s", exe);
+	return linux_path;
+}
+#endif
+
 int main(int argc, char** argv, char** envp)
 {
 	void** sp;
@@ -208,6 +334,11 @@ int main(int argc, char** argv, char** envp)
 	ptrace(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 
 	process_special_env(&mldr_load_results);
+
+#ifdef __x86_64__
+	arm64_reexec(filename, argv, envp, &mldr_load_results);
+	const char* arm64_exe = arm64_host_setup(&mldr_load_results);
+#endif
 
 #ifdef __i386__
 	load(filename, CPU_TYPE_X86, false, argv, &mldr_load_results); // accept i386 only
@@ -319,6 +450,10 @@ int main(int argc, char** argv, char** envp)
 		exit(1);
 	}
 
+#ifdef __x86_64__
+	if (arm64_exe != NULL)
+		filename = (char*) arm64_exe;
+#endif
 	if (dserver_rpc_set_executable_path(filename, strlen(filename)) < 0) {
 		fprintf(stderr, "Failed to tell darlingserver about our executable path\n");
 		exit(1);
