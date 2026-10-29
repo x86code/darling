@@ -93,7 +93,7 @@
 	url = https://github.com/darlinghq/darling-expat.git
 [submodule "src/external/sqlite"]
 	path = src/external/sqlite
-	url = https://github.com/darlinghq/darling-sqlite.git
+	url = git@github.com:designgears/darling-sqlite.git
 [submodule "src/external/libauto"]
 	path = src/external/libauto
 	url = https://github.com/darlinghq/darling-libauto.git
