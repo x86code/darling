@@ -9,7 +9,7 @@
 	url = https://github.com/darlinghq/darling-libcxxabi.git
 [submodule "src/external/libkqueue"]
 	path = src/external/libkqueue
-	url = git@github.com:designgears/darling-libkqueue.git
+	url = git@github.com:x86code/darling-libkqueue.git
 [submodule "src/external/zlib"]
 	path = src/external/zlib
 	url = https://github.com/darlinghq/darling-zlib.git
@@ -93,7 +93,7 @@
 	url = https://github.com/darlinghq/darling-expat.git
 [submodule "src/external/sqlite"]
 	path = src/external/sqlite
-	url = git@github.com:designgears/darling-sqlite.git
+	url = git@github.com:x86code/darling-sqlite.git
 [submodule "src/external/libauto"]
 	path = src/external/libauto
 	url = https://github.com/darlinghq/darling-libauto.git
@@ -171,13 +171,13 @@
 	url = https://github.com/darlinghq/cctools-port.git
 [submodule "src/external/objc4"]
 	path = src/external/objc4
-	url = git@github.com:designgears/darling-objc4.git
+	url = git@github.com:x86code/darling-objc4.git
 [submodule "src/external/libplatform"]
 	path = src/external/libplatform
-	url = git@github.com:designgears/darling-libplatform.git
+	url = git@github.com:x86code/darling-libplatform.git
 [submodule "src/external/libpthread"]
 	path = src/external/libpthread
-	url = git@github.com:designgears/darling-libpthread.git
+	url = git@github.com:x86code/darling-libpthread.git
 [submodule "src/external/syslog"]
 	path = src/external/syslog
 	url = https://github.com/darlinghq/darling-syslog.git
@@ -296,7 +296,7 @@
 	url = https://github.com/darlinghq/darling-opendirectory.git
 [submodule "src/external/iokitd"]
 	path = src/external/iokitd
-	url = git@github.com:designgears/darling-iokitd.git
+	url = git@github.com:x86code/darling-iokitd.git
 [submodule "src/external/OpenAL"]
 	path = src/external/OpenAL
 	url = https://github.com/darlinghq/darling-openal.git
@@ -378,7 +378,7 @@
 	url = https://github.com/darlinghq/darling-pyobjc.git
 [submodule "src/external/darlingserver"]
 	path = src/external/darlingserver
-	url = git@github.com:designgears/darlingserver.git
+	url = git@github.com:x86code/darlingserver.git
 [submodule "src/external/libmalloc"]
 	path = src/external/libmalloc
 	url = https://github.com/darlinghq/darling-libmalloc.git
@@ -390,7 +390,7 @@
 	url = https://github.com/darlinghq/darling-Libsystem.git
 [submodule "src/external/dyld"]
 	path = src/external/dyld
-	url = git@github.com:designgears/darling-dyld.git
+	url = git@github.com:x86code/darling-dyld.git
 [submodule "src/external/AvailabilityVersions"]
 	path = src/external/AvailabilityVersions
 	url = https://github.com/darlinghq/darling-AvailabilityVersions
@@ -432,7 +432,7 @@
 	url = https://github.com/darlinghq/darling-libstdcxx.git
 [submodule "src/external/libunwind"]
 	path = src/external/libunwind
-	url = git@github.com:designgears/darling-libunwind.git
+	url = git@github.com:x86code/darling-libunwind.git
 [submodule "src/external/libutil"]
 	path = src/external/libutil
 	url = https://github.com/darlinghq/darling-libutil.git
@@ -453,4 +453,4 @@
 	url = https://github.com/darlinghq/darling-metal.git
 [submodule "src/external/xnu"]
 	path = src/external/xnu
-	url = git@github.com:designgears/darling-xnu.git
+	url = git@github.com:x86code/darling-xnu.git
