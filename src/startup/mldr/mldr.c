@@ -291,6 +291,11 @@ int main(int argc, char** argv, char** envp)
 	size_t orig_argv0_len = 0;
 	const char* orig_argv1 = NULL;
 
+	// x86Code: no transparent huge pages for Darling processes (inherited across fork/exec; arm64 guests already set
+	// it in libarm64jit's host.cpp). With the host's THP "always", the x86_64 daemons' sparse malloc/libdispatch
+	// regions were backed by 2 MB pages: iokitd ~66 of its ~70 MB PSS was AnonHugePages for a few KB actually used.
+	prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0);
+
 	mldr_load_results.kernfd = -1;
 	mldr_load_results.argc = argc;
 	mldr_load_results.argv = argv;
