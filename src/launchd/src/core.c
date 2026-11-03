@@ -450,6 +450,10 @@ static jobmgr_t jobmgr_parent(jobmgr_t jm);
 static jobmgr_t jobmgr_do_garbage_collection(jobmgr_t jm);
 static bool jobmgr_label_test(jobmgr_t jm, const char *str);
 static void jobmgr_reap_bulk(jobmgr_t jm, struct kevent *kev);
+#ifdef DARLING
+static void darling_reap_strays(void);
+static int darling_reap_strays_timer;
+#endif
 static void jobmgr_log_stray_children(jobmgr_t jm, bool kill_strays);
 static void jobmgr_kill_stray_children(jobmgr_t jm, pid_t *p, size_t np);
 static void jobmgr_remove(jobmgr_t jm);
@@ -4255,6 +4259,69 @@ jobmgr_reap_bulk(jobmgr_t jm, struct kevent *kev)
 	}
 }
 
+#ifdef DARLING
+// x86Code: launchd as the container's pid 1 reaps stray zombies. XNU reaps an orphan itself once it is reparented to
+// initproc (P_LIST_DEADPARENT: reap_child_locked in proc_exit), so launchd only ever waits for its jobs. On Linux the
+// orphan is reparented to the pid namespace's init (this launchd) and stays a zombie until init waits for it: when a
+// launchd_sim died (or was SIGKILLed by boot-a64.sh's stop_prefix), every process it had started was reparented here,
+// and each of them that exited later (an app jetsam.py killed, a daemon) stayed Z forever. Every 5 s, the zombie
+// children (Linux /proc: the container's own procfs, pids are this namespace's) that are not a job are waited for.
+static void
+darling_reap_strays(void)
+{
+	DIR *d = opendir("/proc/self/task");
+	if (!d) {
+		return;
+	}
+	struct dirent *de;
+	while ((de = readdir(d))) {
+		if (de->d_name[0] < '0' || de->d_name[0] > '9') {
+			continue;
+		}
+		char path[64], buf[4096];
+		snprintf(path, sizeof(path), "/proc/self/task/%s/children", de->d_name);
+		int fd = open(path, O_RDONLY);
+		if (fd < 0) {
+			continue;
+		}
+		ssize_t n = read(fd, buf, sizeof(buf) - 1);
+		close(fd);
+		if (n <= 0) {
+			continue;
+		}
+		buf[n] = 0;
+		char *save = NULL;
+		for (char *t = strtok_r(buf, " \n", &save); t; t = strtok_r(NULL, " \n", &save)) {
+			pid_t p = (pid_t)atoi(t);
+			if (p <= 1 || jobmgr_find_by_pid_deep(root_jobmgr, p, true)) {
+				continue;
+			}
+			char st[512];
+			snprintf(path, sizeof(path), "/proc/%d/stat", p);
+			int sfd = open(path, O_RDONLY);
+			if (sfd < 0) {
+				continue;
+			}
+			ssize_t sn = read(sfd, st, sizeof(st) - 1);
+			close(sfd);
+			if (sn <= 0) {
+				continue;
+			}
+			st[sn] = 0;
+			char *rp = strrchr(st, ')');
+			if (!rp || rp[1] != ' ' || rp[2] != 'Z') {
+				continue;
+			}
+			int status = 0;
+			if (waitpid(p, &status, WNOHANG) == p) {
+				jobmgr_log(root_jobmgr, LOG_NOTICE, "Reaped stray zombie PID %d (status 0x%x)", p, status);
+			}
+		}
+	}
+	closedir(d);
+}
+#endif
+
 void
 jobmgr_callback(void *obj, struct kevent *kev)
 {
@@ -4309,6 +4376,10 @@ jobmgr_callback(void *obj, struct kevent *kev)
 	case EVFILT_TIMER:
 		if (kev->ident == (uintptr_t)&sorted_calendar_events) {
 			calendarinterval_callback();
+#ifdef DARLING
+		} else if (kev->ident == (uintptr_t)&darling_reap_strays_timer) {
+			darling_reap_strays();
+#endif
 		} else if (kev->ident == (uintptr_t)jm) {
 			jobmgr_log(jm, LOG_DEBUG, "Shutdown timer firing.");
 			jobmgr_still_alive_with_check(jm);
@@ -6908,6 +6979,11 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR2, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGINFO, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(0, EVFILT_FS, EV_ADD, VQ_MOUNT|VQ_UNMOUNT|VQ_UPDATE, 0, jmr));
+#ifdef DARLING
+		if (pid1_magic) {
+			(void)jobmgr_assumes_zero_p(jmr, kevent_mod((uintptr_t)&darling_reap_strays_timer, EVFILT_TIMER, EV_ADD, NOTE_SECONDS, 5, jmr));
+		}
+#endif
 	}
 
 	if (name && !skip_init) {
